@@ -1,0 +1,1458 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Isomorphic Hex Keyboard Synth</title>
+  <style>
+    :root{
+      --bg:#0b0d12;
+      --fg:#e9eefc;
+      --muted:#a9b3d6;
+      --stroke:rgba(255,255,255,.10);
+      --shadow:0 12px 30px rgba(0,0,0,.35);
+    }
+    *{box-sizing:border-box;}
+    body{
+      margin:0;
+      background:
+        radial-gradient(1200px 700px at 20% 10%, rgba(122,162,255,.16), transparent 60%),
+        radial-gradient(900px 600px at 85% 30%, rgba(255,211,107,.10), transparent 60%),
+        var(--bg);
+      color:var(--fg);
+      font: 14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      user-select:none;
+      -webkit-user-select:none;
+      touch-action: manipulation;
+    }
+    header{
+      padding:16px 16px 10px;
+      max-width:1100px;
+      margin:0 auto;
+    }
+    h1{margin:0 0 6px; font-size:18px; letter-spacing:.2px;}
+    .sub{color:var(--muted); font-size:12px;}
+
+    .wrap{
+      max-width:1100px;
+      margin:0 auto;
+      padding:0 16px 18px;
+      display:grid;
+      grid-template-columns: 320px 1fr;
+      gap:14px;
+      align-items:start;
+    }
+    @media (max-width: 900px){ .wrap{grid-template-columns:1fr;} }
+
+    .panel{
+      background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border:1px solid var(--stroke);
+      border-radius:16px;
+      box-shadow:var(--shadow);
+      overflow:hidden;
+    }
+    .panel .hd{
+      padding:12px 12px 10px;
+      background:rgba(255,255,255,.03);
+      border-bottom:1px solid rgba(255,255,255,.06);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .pill{
+      font-size:12px;
+      color:var(--muted);
+      padding:4px 8px;
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:999px;
+      background:rgba(0,0,0,.12);
+      white-space:nowrap;
+    }
+    .panel .bd{padding:12px;}
+
+    .ctrl{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:10px;
+      margin-bottom:10px;
+    }
+    .ctrl .row{grid-column:1 / -1;}
+
+    label{display:block; color:var(--muted); font-size:12px; margin-bottom:6px;}
+    select, input[type="range"], input[type="number"], button{
+      width:100%;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(0,0,0,.18);
+      color:var(--fg);
+      padding:10px 10px;
+      outline:none;
+    }
+    input[type="range"]{padding:10px 8px;}
+    input[type="number"]{padding:10px 10px;}
+
+    .btnrow{display:flex; gap:10px; margin-top:10px;}
+    .btn{cursor:pointer; font-weight:600;}
+    .btn.primary{
+      background:linear-gradient(180deg, rgba(122,162,255,.35), rgba(122,162,255,.18));
+      border-color:rgba(122,162,255,.35);
+    }
+
+    .kbdPanel{padding:12px;}
+
+    /* SVG board */
+    #board{
+      width:100%;
+      height:auto;
+      display:block;
+      border-radius:14px;
+      background:linear-gradient(180deg, rgba(0,0,0,.22), rgba(0,0,0,.12));
+      border:1px solid rgba(255,255,255,.08);
+      touch-action:none;
+    }
+
+    .help{margin-top:10px; color:var(--muted); font-size:12px;}
+    .help kbd{
+      font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      padding:2px 6px;
+      border-radius:8px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(0,0,0,.18);
+      color:var(--fg);
+    }
+
+    .mono{
+      font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      color:var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Isomorphic Hex Keyboard Synth</h1>
+    <div class="sub">Mapping: <span class="pill">whole step → right</span> <span class="pill">half step → top-right</span> · Touch / mouse supported · WebAudio</div>
+  </header>
+
+  <div class="wrap">
+    <section class="panel">
+      <div class="hd">
+        <div>Sound</div>
+        <div class="pill" id="ctxState">audio: idle</div>
+      </div>
+      <div class="bd">
+        <div class="ctrl">
+          <div>
+            <label for="wave">Wave</label>
+            <select id="wave">
+              <option value="sine">Sine</option>
+              <option value="triangle" selected>Triangle</option>
+              <option value="sawtooth">Saw</option>
+              <option value="square">Square</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="poly">Polyphony limit</label>
+            <select id="poly">
+              <option>4</option>
+              <option selected>8</option>
+              <option>12</option>
+              <option>16</option>
+            </select>
+          </div>
+
+          <div class="row" id="massControls" style="margin-top:2px;">
+            <div class="ctrl" style="grid-template-columns: 1fr 1fr 1fr; gap:10px; margin:0;">
+              <div>
+                <label for="glideIn">Glide In (ms)</label>
+                <input id="glideIn" type="range" min="0" max="400" value="80" step="5" />
+              </div>
+              <div>
+                <label for="glideOut">Glide Out (ms)</label>
+                <input id="glideOut" type="range" min="0" max="400" value="120" step="5" />
+              </div>
+              <div>
+                <label for="massSnap">Snap radius</label>
+                <input id="massSnap" type="range" min="0.00" max="0.89" value="0.6" step="0.01" />
+              </div>
+            </div>
+            <div class="mono" style="margin-top:6px;">Hybrid only. Snap radius is a fraction of hex size.</div>
+          </div>
+
+          <div>
+            <label for="volume">Volume</label>Volume</label>
+            <input id="volume" type="range" min="0" max="1" value="0.35" step="0.01" />
+          </div>
+
+          <div>
+            <label for="detune">Detune (cents)</label>
+            <input id="detune" type="range" min="-30" max="30" value="0" step="1" />
+          </div>
+
+          <div>
+            <label for="attack">Attack (ms)</label>
+            <input id="attack" type="range" min="0" max="120" value="8" step="1" />
+          </div>
+
+          <div>
+            <label for="release">Release (ms)</label>
+            <input id="release" type="range" min="10" max="600" value="180" step="1" />
+          </div>
+
+          <div>
+            <label for="sustain">Sustain</label>
+            <input id="sustain" type="range" min="0" max="1" value="0.70" step="0.01" />
+          </div>
+
+          <div>
+            <label for="glide">Glide (ms)</label>
+            <input id="glide" type="range" min="0" max="120" value="0" step="1" />
+          </div>
+
+          <div>
+            <label for="slideAction">Slide behavior</label>
+            <select id="slideAction">
+              <option value="retrigger" selected>Retrigger notes</option>
+              <option value="bend">Pitch bend</option>
+              <option value="control">Control only (no notes)</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="bendRange">Bend range (semitones)</label>
+            <input id="bendRange" type="number" min="0.1" max="24" step="0.1" value="2" />
+          </div>
+
+          <div class="row">
+            <label for="fund">Fundamental (Hz)</label>
+            <input id="fund" type="number" min="20" max="2000" step="0.001" value="261.625565" />
+            <div class="mono" style="margin-top:6px;">Frequency: \(f(n)=f_0\cdot 2^{n/12}\)</div>
+          </div>
+
+          <div>
+            <label for="transpose">Transpose (semitones)</label>
+            <input id="transpose" type="range" min="-24" max="24" value="0" step="1" />
+          </div>
+
+          <div>
+            <label for="octave">Octave shift</label>
+            <input id="octave" type="range" min="-2" max="2" value="0" step="1" />
+          </div>
+        </div>
+
+        <div class="btnrow">
+          <button class="btn primary" id="start">Start audio</button>
+          <button class="btn" id="panic">Panic (all notes off)</button>
+        </div>
+
+        <div class="help">
+          Desktop: hold <kbd>Shift</kbd> for latch (toggle). Space toggles latch mode. Arrow keys move the root.
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="hd">
+        <div>Keyboard</div>
+        <div class="pill" id="layoutPill">hex · 10×7</div>
+      </div>
+      <div class="kbdPanel">
+        <svg id="board" viewBox="0 0 1000 700" aria-label="Isomorphic keyboard">
+          <g id="keys"></g>
+          <g id="snapHints"></g>
+          <g id="particles"></g>
+        </svg>
+        <div class="help">
+          Snap radius slider sets the mode: max = Quantized (tap/drag, no particle), min = Field (continuous, particle follows), in-between = Hybrid (snap with glide in/out; particle only while between snap and free; circles show snap radius).
+        </div>
+      </div>
+    </section>
+  </div>
+
+<script>
+(function(){
+  function onReady(fn){
+    if(document.readyState === 'complete' || document.readyState === 'interactive') fn();
+    else document.addEventListener('DOMContentLoaded', fn);
+  }
+
+  onReady(function(){
+    'use strict';
+
+    // -------- Utilities --------
+    var NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+    var MIDI_BASE = 60; // Middle C reference for MIDI output
+    function mod(n,m){ return ((n % m) + m) % m; }
+    function semitoneToName(n){ return NOTE_NAMES[mod(Math.round(n), 12)]; }
+    function isAccidental(n){ return NOTE_NAMES[mod(Math.round(n), 12)].indexOf('#') !== -1; }
+    function clamp(v, min, max){ return Math.min(max, Math.max(min, v)); }
+
+    function getParamNumber(name, fallback){
+      try{
+        var u = new URL(location.href);
+        var v = u.searchParams.get(name);
+        if(v === null || v === "") return fallback;
+        var x = Number(v);
+        return isFinite(x) ? x : fallback;
+      }catch(_){
+        return fallback;
+      }
+    }
+
+    // -------- DOM --------
+    function $(id){ return document.getElementById(id); }
+    var elBoard = $("board");
+    var elKeys = $("keys");
+    var elSnapHints = $("snapHints");
+    var elParticles = $("particles");
+    var elCtxState = $("ctxState");
+
+    var ctl = {
+      wave: $("wave"),
+      poly: $("poly"),
+      volume: $("volume"),
+      detune: $("detune"),
+      attack: $("attack"),
+      release: $("release"),
+      sustain: $("sustain"),
+      glide: $("glide"),
+      fund: $("fund"),
+      transpose: $("transpose"),
+      octave: $("octave"),
+      start: $("start"),
+      panic: $("panic"),
+      glideIn: $("glideIn"),
+      glideOut: $("glideOut"),
+      massSnap: $("massSnap"),
+      slideAction: $("slideAction"),
+      bendRange: $("bendRange")
+    };
+
+    // -------- MIDI over WebSocket --------
+    var midiSock = null;
+    var midiReady = false;
+    var midiReconnectTimer = 0;
+    var midiStatus = { connected: false, port: null, outputs: [] };
+    var synthMutedForMidi = false;
+
+    function midiSend(payload){
+      if(!midiSock || midiSock.readyState !== 1) return;
+      try{ midiSock.send(JSON.stringify(payload)); }catch(_){}
+    }
+
+    function midiNoteOn(semitone, velocity){
+      var note = MIDI_BASE + Math.round(semitone);
+      midiSend({ type: "note_on", note: note, velocity: velocity || 100 });
+    }
+
+    function midiNoteOff(semitone){
+      var note = MIDI_BASE + Math.round(semitone);
+      midiSend({ type: "note_off", note: note });
+    }
+
+    function midiNoteOffNumber(note){
+      midiSend({ type: "note_off", note: note });
+    }
+
+    function midiSendPitchBendValue(value){
+      var v = Math.round(clamp(value, -8192, 8191));
+      midiSend({ type: "pitch_bend", value: v });
+    }
+
+    function midiSendPitchBendDelta(deltaSemitones, range){
+      var r = Math.max(0.01, range || 2);
+      var norm = clamp(deltaSemitones / r, -1, 1);
+      var bendVal = Math.round(norm * 8191);
+      midiSendPitchBendValue(bendVal);
+    }
+
+    function midiResetPitchBend(){
+      midiSendPitchBendValue(0);
+    }
+
+    function applyPitchBendForVoice(v, range){
+      if(!v) return;
+      var anchor = (v.bendAnchor !== undefined && v.bendAnchor !== null) ? v.bendAnchor : v.semitone || 0;
+      var delta = (v.semitone || 0) - anchor;
+      midiSendPitchBendDelta(delta, range || v.bendRange || 2);
+    }
+
+    function midiSwapNotes(prevMidiNote, nextSemitone, velocity){
+      var nextMidi = MIDI_BASE + Math.round(nextSemitone);
+      if(prevMidiNote !== undefined && prevMidiNote !== null && prevMidiNote !== nextMidi){
+        midiNoteOffNumber(prevMidiNote);
+      }
+      if(prevMidiNote !== nextMidi){
+        midiNoteOn(nextSemitone, velocity || 100);
+      }
+      return nextMidi;
+    }
+
+    function midiConnect(){
+      var proto = (location.protocol === "https:") ? "wss" : "ws";
+      var url = proto + "://" + location.host + "/ws";
+      try{
+        midiSock = new WebSocket(url);
+      }catch(err){
+        console.warn("MIDI WS connect failed", err);
+        return;
+      }
+
+      midiSock.onopen = function(){
+        midiReady = true;
+        console.info("MIDI WS connected");
+      };
+      midiSock.onclose = function(){
+        midiReady = false;
+        midiStatus = { connected: false, port: null, outputs: [] };
+        setSynthMutedForMidi(false);
+        midiSock = null;
+        if(midiReconnectTimer) clearTimeout(midiReconnectTimer);
+        midiReconnectTimer = setTimeout(midiConnect, 1200);
+      };
+      midiSock.onerror = function(err){
+        console.warn("MIDI WS error", err);
+      };
+      midiSock.onmessage = function(ev){
+        try{
+          var msg = JSON.parse(ev.data);
+          if(msg && msg.type === "status"){
+            console.info("MIDI status:", msg);
+            midiStatus = msg;
+            setSynthMutedForMidi(!!msg.connected);
+          }
+        }catch(_){}
+      };
+    }
+
+    // Read parameters
+    ctl.fund.value = String(getParamNumber("fundamental", Number(ctl.fund.value)));
+
+    // -------- Audio engine --------
+    var ctx = null;
+    var master = null;
+
+    function applyMasterGain(){
+      if(!master) return;
+      var vol = synthMutedForMidi ? 0 : Number(ctl.volume.value);
+      master.gain.value = vol;
+    }
+
+    function setSynthMutedForMidi(shouldMute){
+      var next = !!shouldMute;
+      if(next === synthMutedForMidi) return;
+      synthMutedForMidi = next;
+      if(synthMutedForMidi) allNotesOff();
+      applyMasterGain();
+      updateCtxState();
+    }
+
+    // keyId -> {osc, gain, semitone, startedAt, particle}
+    var voices = (typeof Map !== 'undefined') ? new Map() : null;
+    var latched = (typeof Set !== 'undefined') ? new Set() : null;
+
+    function mapHas(m,k){ return m && m.has ? m.has(k) : false; }
+    function mapGet(m,k){ return m && m.get ? m.get(k) : null; }
+    function mapSet(m,k,v){ if(m && m.set) m.set(k,v); }
+    function mapDelete(m,k){ if(m && m.delete) m.delete(k); }
+    function mapKeys(m){ return m && m.keys ? Array.from(m.keys()) : []; }
+    function mapForEach(m,fn){ if(m && m.forEach) m.forEach(fn); }
+    function mapSize(m){ return m && typeof m.size === 'number' ? m.size : 0; }
+
+    function setHas(s,k){ return s && s.has ? s.has(k) : false; }
+    function setAdd(s,k){ if(s && s.add) s.add(k); }
+    function setDelete(s,k){ if(s && s.delete) s.delete(k); }
+    function setClear(s){ if(s && s.clear) s.clear(); }
+
+    function ensureAudio(){
+      if(ctx) return;
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+      master = ctx.createGain();
+      applyMasterGain();
+
+      // Simple waveshaper limiter (soft clip)
+      var shaper = ctx.createWaveShaper();
+      var N = 2048;
+      var curve = new Float32Array(N);
+      for(var i=0;i<N;i++){
+        var x = (i/(N-1))*2-1;
+        curve[i] = Math.tanh(2.2*x);
+      }
+      shaper.curve = curve;
+      shaper.oversample = "4x";
+
+      master.connect(shaper);
+      shaper.connect(ctx.destination);
+
+      updateCtxState();
+      ctx.onstatechange = updateCtxState;
+    }
+
+    function updateCtxState(){
+      var suffix = synthMutedForMidi ? " (disabled; MIDI connected)" : "";
+      if(!ctx){ elCtxState.textContent = "audio: idle" + suffix; return; }
+      elCtxState.textContent = "audio: " + ctx.state + suffix;
+    }
+
+    function currentMode(){
+      var snapVal = ctl.massSnap ? Number(ctl.massSnap.value) : 0.6;
+      var snapMin = ctl.massSnap ? Number(ctl.massSnap.min || 0) : 0;
+      var snapMax = ctl.massSnap ? Number(ctl.massSnap.max || 0.89) : 0.89;
+      if(snapVal <= snapMin) return "field";
+      if(snapVal >= snapMax) return "quantized";
+      return "hybrid";
+    }
+
+    function currentSettings(){
+      return {
+        wave: ctl.wave.value,
+        poly: Number(ctl.poly.value),
+        vol: Number(ctl.volume.value),
+        detune: Number(ctl.detune.value),
+        attack: Number(ctl.attack.value)/1000,
+        release: Number(ctl.release.value)/1000,
+        sustain: Number(ctl.sustain.value),
+        glide: Number(ctl.glide.value)/1000,
+        glideIn: ctl.glideIn ? Number(ctl.glideIn.value)/1000 : 0.08,
+        glideOut: ctl.glideOut ? Number(ctl.glideOut.value)/1000 : 0.12,
+        fund: Number(ctl.fund.value),
+        transpose: Number(ctl.transpose.value) + (Number(ctl.octave.value)*12),
+        slideAction: ctl.slideAction ? ctl.slideAction.value : "retrigger",
+        bendRange: ctl.bendRange ? Number(ctl.bendRange.value) : 2,
+        slideMode: currentMode(),
+        massSnap: ctl.massSnap ? Number(ctl.massSnap.value) : 0.6
+      };
+    }
+
+    function freqForSemitone(n){
+      var s = currentSettings();
+      return s.fund * Math.pow(2, (n + s.transpose)/12);
+    }
+
+    function voiceCount(){ return mapSize(voices); }
+
+    function stealOldest(){
+      var oldestKey = null;
+      var oldestT = Infinity;
+      mapForEach(voices, function(v, k){
+        if(v.startedAt < oldestT){ oldestT = v.startedAt; oldestKey = k; }
+      });
+      if(oldestKey) noteOff(oldestKey);
+    }
+
+    // -------- Hex board layout --------
+    // x increases to the right (whole step +2)
+    // y increases to the top-right (half step +1)
+    // Pitch: n = root + 2*x + 1*y
+
+    var GRID = { cols: 10, rows: 7 };
+    var rootSemitone = 0;
+    var HEX = { size: 48 };
+
+    function hexPoints(cx, cy, r){
+      var pts = [];
+      for(var i=0;i<6;i++){
+        var ang = (Math.PI/180) * (90 + i*60);
+        var x = cx + r * Math.cos(ang);
+        var y = cy + r * Math.sin(ang);
+        pts.push(x.toFixed(2) + "," + y.toFixed(2));
+      }
+      return pts.join(" ");
+    }
+
+    function axialToPixel(x, y, r){
+      var px = (Math.sqrt(3) * r) * (x + y/2);
+      var py = (1.5 * r) * (-y);
+      return [px, py];
+    }
+
+    // keys: {id,x,y,n,cx,cy,poly,text,tiny,accidental}
+    var keys = [];
+    var boardTf = { minX:0, minY:0, pad:70, r:HEX.size };
+
+    function buildBoard(){
+      // Important: do NOT wipe the whole SVG or we delete particles.
+      if(elKeys) elKeys.innerHTML = "";
+
+      var r = HEX.size;
+      var pad = 70;
+
+      var coords = [];
+      for(var row=0; row<GRID.rows; row++){
+        for(var col=0; col<GRID.cols; col++){
+          var x = col;
+          var y = (GRID.rows-1 - row);
+          coords.push([x,y]);
+        }
+      }
+
+      var minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
+      var pix = [];
+      for(var i=0;i<coords.length;i++){
+        var xy = coords[i];
+        var pp = axialToPixel(xy[0], xy[1], r);
+        var px = pp[0], py = pp[1];
+        if(px < minX) minX = px;
+        if(px > maxX) maxX = px;
+        if(py < minY) minY = py;
+        if(py > maxY) maxY = py;
+        pix.push([xy[0], xy[1], px, py]);
+      }
+
+      var w = (maxX - minX) + pad*2;
+      var h = (maxY - minY) + pad*2;
+      elBoard.setAttribute("viewBox", "0 0 " + w.toFixed(0) + " " + h.toFixed(0));
+
+      boardTf = { minX:minX, minY:minY, pad:pad, r:r };
+      keys.length = 0;
+
+      // Ensure particles stay on top
+      if(elSnapHints && elSnapHints.parentNode === elBoard){
+        elBoard.appendChild(elSnapHints);
+      }
+      if(elParticles && elParticles.parentNode === elBoard){
+        elBoard.appendChild(elParticles);
+      }
+
+      // draw back-to-front
+      pix.sort(function(a,b){ return (b[3]-a[3]) || (a[2]-b[2]); });
+
+      for(var j=0;j<pix.length;j++){
+        var item = pix[j];
+        var x2 = item[0], y2 = item[1], px2 = item[2], py2 = item[3];
+
+        var cx = (px2 - minX) + pad;
+        var cy = (py2 - minY) + pad;
+        var n = rootSemitone + 2*x2 + 1*y2;
+        var id = "k_" + x2 + "_" + y2;
+
+        var g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        g.setAttribute("data-id", id);
+        g.style.cursor = "pointer";
+
+        var poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+        poly.setAttribute("points", hexPoints(cx, cy, r));
+        poly.setAttribute("stroke", "rgba(255,255,255,.12)");
+        poly.setAttribute("stroke-width", "2");
+        poly.setAttribute("vector-effect", "non-scaling-stroke");
+
+        var accidental = isAccidental(n);
+        poly.setAttribute("fill", accidental ? "#3f465f" : "#f2f4f9");
+
+        var text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", cx);
+        text.setAttribute("y", cy + 6);
+        text.setAttribute("text-anchor", "middle");
+        text.setAttribute("font-size", "22");
+        text.setAttribute("font-weight", "700");
+        text.setAttribute("font-family", "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif");
+        text.setAttribute("fill", accidental ? "#f6f7fb" : "#0a0e18");
+        text.textContent = semitoneToName(n);
+
+        g.appendChild(poly);
+        g.appendChild(text);
+        if(elKeys) elKeys.appendChild(g);
+
+        keys.push({id:id, x:x2, y:y2, n:n, cx:cx, cy:cy, poly:poly, text:text, tiny:null, accidental:accidental});
+      }
+
+      refreshKeyStyles();
+      refreshParticlesForExistingVoices();
+      renderSnapHints();
+    }
+
+    function refreshKeyStyles(){
+      // Determine snapped mass targets (visual highlight only)
+      var massSnapped = Object.create(null);
+      if(hybridState){
+        hybridState.forEach(function(st){
+          if(st && st.snapKeyId) massSnapped[st.snapKeyId] = true;
+        });
+      }
+
+      for(var i2=0;i2<keys.length;i2++){
+        var k = keys[i2];
+        var isDown = mapHas(voices, k.id) || setHas(latched, k.id);
+        var isSnappedTarget = !!massSnapped[k.id];
+
+        if(isDown || isSnappedTarget){
+          var activeFill = k.accidental ? "rgba(122,162,255,0.90)" : "#ffd36b";
+          k.poly.setAttribute("fill", activeFill);
+          k.text.setAttribute("fill", "#0a0e18");
+        }else{
+          k.poly.setAttribute("fill", k.accidental ? "#3f465f" : "#f2f4f9");
+          k.text.setAttribute("fill", k.accidental ? "#f6f7fb" : "#0a0e18");
+        }
+      }
+    }
+
+    function findKeyById(id){
+      for(var i=0;i<keys.length;i++) if(keys[i].id === id) return keys[i];
+      return null;
+    }
+
+    function keyAtTarget(target){
+      if(!target) return null;
+      var g = target.closest ? target.closest("g[data-id]") : null;
+      if(!g) return null;
+      return findKeyById(g.getAttribute("data-id"));
+    }
+
+    function keyAtClientPoint(clientX, clientY){
+      var el = document.elementFromPoint(clientX, clientY);
+      if(!el) return null;
+      return keyAtTarget(el);
+    }
+
+    // ----- SVG coordinate helpers -----
+    function svgPointFromClient(clientX, clientY){
+      var pt = elBoard.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      var ctm = elBoard.getScreenCTM();
+      if(!ctm) return null;
+      return pt.matrixTransform(ctm.inverse());
+    }
+
+    // Continuous pitch field mapping: n = root + 2x + 1y
+    function pixelToAxial(px, py){
+      var r = boardTf.r;
+      var y = -(py) / (1.5 * r);
+      var x = (px / (Math.sqrt(3) * r)) - (y / 2);
+      return {x:x, y:y};
+    }
+
+    function semitoneAtEvent(e){
+      var p = svgPointFromClient(e.clientX, e.clientY);
+      if(!p) return null;
+      var px = (p.x - boardTf.pad) + boardTf.minX;
+      var py = (p.y - boardTf.pad) + boardTf.minY;
+      var a = pixelToAxial(px, py);
+      return rootSemitone + 2*a.x + 1*a.y;
+    }
+
+    function svgPosAtEvent(e){
+      return svgPointFromClient(e.clientX, e.clientY);
+    }
+
+    // -------- Particles --------
+    function createParticle(){
+      var c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      c.setAttribute("r", "10");
+      c.setAttribute("fill", "rgba(255,120,80,0.90)");
+      c.setAttribute("stroke", "rgba(255,255,255,0.85)");
+      c.setAttribute("stroke-width", "2");
+      c.setAttribute("vector-effect", "non-scaling-stroke");
+      if(elParticles) elParticles.appendChild(c);
+      return c;
+    }
+
+    function setParticlePos(p, cx, cy){
+      if(!p) return;
+      p.setAttribute("cx", cx.toFixed(2));
+      p.setAttribute("cy", cy.toFixed(2));
+    }
+
+    function setParticleToKeyCenter(p, key){
+      if(!p || !key) return;
+      setParticlePos(p, key.cx, key.cy);
+    }
+
+    function setParticleToEvent(p, e){
+      var sp = svgPosAtEvent(e);
+      if(!sp) return;
+      setParticlePos(p, sp.x, sp.y);
+    }
+
+    function refreshParticlesForExistingVoices(){
+      // If the board is rebuilt, key centers change in SVG coords.
+      // Re-anchor any key-based voices.
+      mapForEach(voices, function(v, keyId){
+        if(!v || !v.particle) return;
+        if(keyId && keyId.indexOf("k_") === 0){
+          var k = findKeyById(keyId);
+          if(k) setParticleToKeyCenter(v.particle, k);
+        }
+      });
+    }
+
+    function renderSnapHints(){
+      if(!elSnapHints) return;
+      elSnapHints.innerHTML = "";
+      elSnapHints.setAttribute("pointer-events", "none");
+      var mode = currentSettings().slideMode;
+      if(mode !== "hybrid") return;
+      var s = currentSettings();
+      var snapR = boardTf.r * Math.max(0, s.massSnap);
+      for(var i=0;i<keys.length;i++){
+        var k = keys[i];
+        var c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        c.setAttribute("cx", k.cx.toFixed(2));
+        c.setAttribute("cy", k.cy.toFixed(2));
+        c.setAttribute("r", snapR.toFixed(2));
+        c.setAttribute("fill", "none");
+        var strokeColor = k.accidental ? "rgba(255,211,107,0.88)" : "rgba(122,162,255,0.90)";
+        c.setAttribute("stroke", strokeColor);
+        c.setAttribute("stroke-width", "2.5");
+        c.setAttribute("vector-effect", "non-scaling-stroke");
+        c.setAttribute("pointer-events", "none");
+        elSnapHints.appendChild(c);
+      }
+    }
+
+    // -------- Voice control --------
+    function noteOn(keyId, semitone, opts){
+      opts = opts || {};
+      var silent = !!opts.silent;
+      var s = currentSettings();
+      var glideMs = (opts.glideMs !== undefined && opts.glideMs !== null) ? opts.glideMs : s.glide*1000;
+      var useGlide = glideMs > 0;
+      var midiNote = MIDI_BASE + Math.round(semitone);
+
+      ensureAudio();
+
+      if(mapHas(voices, keyId)){
+        var v = mapGet(voices, keyId);
+        var f = freqForSemitone(semitone);
+        v.semitone = semitone;
+        v.midiNote = midiNote;
+        if(!v.anchorMidiNote) v.anchorMidiNote = midiNote;
+        if(!v.slideActionAtStart) v.slideActionAtStart = s.slideAction;
+        if(ctx && v.osc){
+          if(useGlide){
+            v.osc.frequency.cancelScheduledValues(ctx.currentTime);
+            v.osc.frequency.setTargetAtTime(f, ctx.currentTime, (glideMs/1000)/3);
+          }else{
+            v.osc.frequency.setValueAtTime(f, ctx.currentTime);
+          }
+        }
+        return;
+      }
+
+      if(!silent && voiceCount() >= s.poly) stealOldest();
+
+      var osc = null;
+      var gain = null;
+      osc = ctx.createOscillator();
+      gain = ctx.createGain();
+      osc.type = s.wave;
+      osc.detune.value = s.detune;
+      osc.frequency.value = freqForSemitone(semitone);
+
+      var t0 = ctx.currentTime;
+      var a = s.attack;
+      var sustain = s.sustain;
+
+      gain.gain.cancelScheduledValues(t0);
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, sustain), t0 + Math.max(0.001, a));
+
+      if(!silent){
+        osc.connect(gain);
+        gain.connect(master);
+      }
+      osc.start();
+
+      var particle = (opts.showParticle === false) ? null : createParticle();
+      mapSet(voices, keyId, {
+        osc: osc,
+        gain: gain,
+        semitone: semitone,
+        midiNote: midiNote,
+        startedAt: performance.now(),
+        particle: particle,
+        bendAnchor: semitone,
+        bendRange: s.bendRange,
+        bendAnchorKeyId: keyId,
+        silent: silent,
+        anchorMidiNote: midiNote,
+        slideActionAtStart: s.slideAction
+      });
+
+      if(!silent) midiNoteOn(semitone, 100);
+
+      // initial particle placement
+      if(keyId && keyId.indexOf("k_") === 0){
+        var k = findKeyById(keyId);
+        if(k) setParticleToKeyCenter(particle, k);
+      }
+    }
+
+    function setVoiceSemitone(v, semitone, glideMs, opts){
+      if(!v) return;
+      v.semitone = semitone;
+      if(!opts || !opts.preserveMidiNote){
+        v.midiNote = MIDI_BASE + Math.round(semitone);
+      }
+      if(!ctx || !v.osc) return;
+      var f = freqForSemitone(semitone);
+      var t0 = ctx.currentTime;
+      if(glideMs > 0){
+        v.osc.frequency.cancelScheduledValues(t0);
+        v.osc.frequency.setTargetAtTime(f, t0, (glideMs/1000)/3);
+      }else{
+        v.osc.frequency.setValueAtTime(f, t0);
+      }
+    }
+
+    function noteOff(keyId){
+      var v = mapGet(voices, keyId);
+      if(!v) return;
+
+      // Always send MIDI note off first (even if audio ctx is missing/silent)
+      var offNote = v.anchorMidiNote;
+      var modeAtStart = v.slideActionAtStart || currentSettings().slideAction;
+      var useAnchor = (modeAtStart === "bend" || modeAtStart === "control");
+      if(!useAnchor || offNote === undefined || offNote === null){
+        offNote = v.midiNote;
+      }
+      if(!v.silent && offNote !== undefined && offNote !== null){
+        midiNoteOffNumber(offNote);
+      }else if(!v.silent){
+        midiNoteOff(v.semitone || 0);
+      }
+
+      var s = currentSettings();
+      var t0 = ctx ? ctx.currentTime : 0;
+      var r = s.release;
+
+      if(ctx && v.gain){
+        v.gain.gain.cancelScheduledValues(t0);
+        v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), t0);
+        v.gain.gain.exponentialRampToValueAtTime(0.0001, t0 + Math.max(0.01, r));
+      }
+
+      try{
+        if(v.osc) v.osc.stop(t0 + Math.max(0.02, r + 0.02));
+      }catch(_){ }
+
+      if(v.particle && v.particle.remove) v.particle.remove();
+      v.particle = null;
+      mapDelete(voices, keyId);
+      if(mapSize(voices) === 0) midiResetPitchBend();
+    }
+
+    function allNotesOff(){
+      var ks = mapKeys(voices);
+      for(var i=0;i<ks.length;i++) noteOff(ks[i]);
+      setClear(latched);
+      hybridClear();
+      refreshKeyStyles();
+      midiResetPitchBend();
+    }
+
+    function handleModeChange(){
+      allNotesOff();
+      if(currentMode() !== "quantized") latchMode = false;
+      renderSnapHints();
+    }
+
+    // Live parameter updates
+    ctl.volume.addEventListener("input", function(){ applyMasterGain(); });
+    ctl.wave.addEventListener("change", function(){ mapForEach(voices, function(v){ v.osc.type = ctl.wave.value; }); });
+    ctl.detune.addEventListener("input", function(){ mapForEach(voices, function(v){ v.osc.detune.value = Number(ctl.detune.value); }); });
+    if(ctl.massSnap){
+      var onSnapChange = function(){
+        handleModeChange();
+      };
+      ctl.massSnap.addEventListener("input", onSnapChange);
+      ctl.massSnap.addEventListener("change", onSnapChange);
+    }
+
+    // -------- Build initial board --------
+    buildBoard();
+    midiConnect();
+
+    // -------- Interaction --------
+    var latchMode = false;
+
+    // pointerId -> voiceId
+    var activePointerToVoice = (typeof Map !== 'undefined') ? new Map() : null;
+
+    function activeSet(pid, vid){ if(activePointerToVoice) activePointerToVoice.set(pid, vid); }
+    function activeGet(pid){ return activePointerToVoice ? activePointerToVoice.get(pid) : null; }
+    function activeHas(pid){ return activePointerToVoice ? activePointerToVoice.has(pid) : false; }
+    function activeDelete(pid){ if(activePointerToVoice) activePointerToVoice.delete(pid); }
+
+    // Hybrid mode state: pointerId -> {phase, snapKeyId, fromPos, toPos, fromN, toN, start, duration, lastPos}
+    var hybridState = (typeof Map !== 'undefined') ? new Map() : null;
+    function hybridSet(pid, st){ if(hybridState) hybridState.set(pid, st); }
+    function hybridGet(pid){ return hybridState ? hybridState.get(pid) : null; }
+    function hybridDelete(pid){ if(hybridState) hybridState.delete(pid); }
+    function hybridClear(){ if(hybridState) hybridState.clear(); }
+
+    function nearestKeyAndDist(svgX, svgY){
+      var best = null;
+      var bestD2 = Infinity;
+      for(var i=0;i<keys.length;i++){
+        var k = keys[i];
+        var dx = svgX - k.cx;
+        var dy = svgY - k.cy;
+        var d2 = dx*dx + dy*dy;
+        if(d2 < bestD2){ bestD2 = d2; best = k; }
+      }
+      return { key: best, d2: bestD2 };
+    }
+
+    function semitoneFromSvgPos(svgX, svgY){
+      var px = (svgX - boardTf.pad) + boardTf.minX;
+      var py = (svgY - boardTf.pad) + boardTf.minY;
+      var a = pixelToAxial(px, py);
+      return rootSemitone + 2*a.x + 1*a.y;
+    }
+
+    function snapInfoFromPoint(svgX, svgY){
+      var s = currentSettings();
+      var snapR = boardTf.r * Math.max(0, s.massSnap);
+      var snapR2 = snapR * snapR;
+      var nk = nearestKeyAndDist(svgX, svgY);
+      var inSnap = !!(nk.key && nk.d2 <= snapR2);
+      return { inSnap: inSnap, key: nk.key, snapR: snapR, snapR2: snapR2 };
+    }
+
+    function lerp(a,b,t){ return a + (b-a)*t; }
+
+    var rafId = 0;
+    function hybridAnimLoop(t){
+      rafId = requestAnimationFrame(hybridAnimLoop);
+      if(!hybridState) return;
+      var mode = currentSettings().slideMode;
+      if(mode !== "hybrid") return;
+
+      hybridState.forEach(function(st, pid){
+        var voiceId = activeGet(pid);
+        if(!voiceId) return;
+        var v = mapGet(voices, voiceId);
+        if(!v) return;
+
+        var phase = st.phase || "free";
+        if(phase === "free"){
+          if(v.particle && st.lastPos){
+            setParticlePos(v.particle, st.lastPos.x, st.lastPos.y);
+          }
+          if(st.toN !== undefined && st.toN !== null){
+            setVoiceSemitone(v, st.toN, 0);
+          }
+          return;
+        }
+
+        if(phase === "freeTransition" || phase === "snapTransition"){
+          var dur = st.duration || 0;
+          var u = (dur > 0) ? Math.min(1, Math.max(0, (t - st.start) / (dur * 1000))) : 1;
+          var to = st.toPos || st.lastPos;
+          var from = st.fromPos || to;
+          var x = lerp(from.x, to.x, u);
+          var y = lerp(from.y, to.y, u);
+          if(v.particle) setParticlePos(v.particle, x, y);
+          if(st.fromN !== undefined && st.toN !== undefined){
+            var n = lerp(st.fromN, st.toN, u);
+            setVoiceSemitone(v, n, 0);
+          }
+          if(u >= 1){
+            if(phase === "freeTransition"){
+              st.phase = "free";
+              st.fromPos = null;
+            }else{
+              st.phase = "snap";
+              st.fromPos = null;
+              if(v.particle && v.particle.remove) v.particle.remove();
+              v.particle = null;
+            }
+          }
+        }
+      });
+    }
+    rafId = requestAnimationFrame(hybridAnimLoop);
+
+    function safeSetPointerCapture(pointerId){
+      try{
+        if(elBoard && elBoard.setPointerCapture) elBoard.setPointerCapture(pointerId);
+      }catch(_){ }
+    }
+
+    function pointerDown(e){
+      var s = currentSettings();
+      var isControlOnly = s.slideAction === "control";
+
+      if(s.slideMode === "field" || s.slideMode === "hybrid"){
+        var n0 = semitoneAtEvent(e);
+        if(n0 === null) return;
+
+        var voiceId = "p_" + e.pointerId;
+        safeSetPointerCapture(e.pointerId);
+        activeSet(e.pointerId, voiceId);
+
+        var sp0 = svgPosAtEvent(e);
+        if(!sp0) return;
+
+        if(s.slideMode === "hybrid"){
+          var snap = snapInfoFromPoint(sp0.x, sp0.y);
+          if(snap.inSnap && snap.key){
+            hybridSet(e.pointerId, {
+              phase: "snap",
+              snapKeyId: snap.key.id,
+              lastPos: sp0,
+              toPos: {x: snap.key.cx, y: snap.key.cy},
+              start: performance.now(),
+              duration: s.glideIn,
+              fromN: n0,
+              toN: snap.key.n
+            });
+            noteOn(voiceId, snap.key.n, { showParticle: false, glideMs: s.glideIn*1000, silent: isControlOnly });
+            var vStartSnap = mapGet(voices, voiceId);
+            if(vStartSnap){
+              vStartSnap.bendAnchor = snap.key.n;
+              vStartSnap.bendRange = s.bendRange;
+            }
+          }else{
+            hybridSet(e.pointerId, {
+              phase: "free",
+              snapKeyId: null,
+              lastPos: sp0,
+              toN: n0
+            });
+            noteOn(voiceId, n0, { showParticle: true, glideMs: s.glideOut*1000, silent: isControlOnly });
+            var vFree = mapGet(voices, voiceId);
+            if(vFree && vFree.particle) setParticlePos(vFree.particle, sp0.x, sp0.y);
+            if(vFree){
+              vFree.bendAnchor = n0;
+              vFree.bendRange = s.bendRange;
+            }
+          }
+          refreshKeyStyles();
+          if(e.preventDefault) e.preventDefault();
+          return;
+        }else{
+          noteOn(voiceId, n0, { silent: isControlOnly });
+          var v2 = mapGet(voices, voiceId);
+          if(v2 && v2.particle) setParticleToEvent(v2.particle, e);
+          if(v2){
+            v2.bendAnchor = n0;
+            v2.bendRange = s.bendRange;
+          }
+          refreshKeyStyles();
+          if(e.preventDefault) e.preventDefault();
+          return;
+        }
+      }
+
+      // quantized mode
+      var k = keyAtClientPoint(e.clientX, e.clientY) || keyAtTarget(e.target);
+      if(!k) return;
+
+      safeSetPointerCapture(e.pointerId);
+      activeSet(e.pointerId, k.id);
+
+      var shift = !!e.shiftKey;
+      var latch = latchMode || shift;
+
+      if(latch){
+        if(setHas(latched, k.id)){
+          setDelete(latched, k.id);
+          noteOff(k.id);
+        }else{
+          setAdd(latched, k.id);
+          noteOn(k.id, k.n, { showParticle: false, silent: isControlOnly });
+          var v3 = mapGet(voices, k.id);
+          if(v3){
+            v3.bendAnchor = k.n;
+            v3.bendRange = s.bendRange;
+          }
+          if(v3 && v3.particle) setParticleToKeyCenter(v3.particle, k);
+        }
+      }else{
+        noteOn(k.id, k.n, { showParticle: false, silent: isControlOnly });
+        var v4 = mapGet(voices, k.id);
+        if(v4){
+          v4.bendAnchor = k.n;
+          v4.bendRange = s.bendRange;
+          v4.bendAnchorKeyId = k.id;
+        }
+        if(v4 && v4.particle) setParticleToKeyCenter(v4.particle, k);
+      }
+
+      refreshKeyStyles();
+      if(e.preventDefault) e.preventDefault();
+    }
+
+    function pointerMove(e){
+      var s = currentSettings();
+
+      // Field: particle follows cursor exactly, pitch follows continuous field
+      if(s.slideMode === "field"){
+        var n = semitoneAtEvent(e);
+        if(n === null) return;
+
+        var voiceId = activeGet(e.pointerId);
+        if(!voiceId) return;
+
+        var v = mapGet(voices, voiceId);
+        if(!v) return;
+
+        if(s.slideAction === "bend" || s.slideAction === "control"){
+          var anchor = (v.bendAnchor !== undefined && v.bendAnchor !== null) ? v.bendAnchor : n;
+          var range = Math.max(0.01, s.bendRange || 2);
+          var delta = n - anchor;
+          var clamped = clamp(delta, -range, range);
+          v.bendAnchor = anchor;
+          v.bendRange = range;
+          setVoiceSemitone(v, anchor + clamped, s.glide*1000, { preserveMidiNote: true });
+          v.semitone = anchor + clamped;
+          applyPitchBendForVoice(v, range);
+        }else{
+          // update pitch
+          var f = freqForSemitone(n);
+          v.semitone = n;
+          var t0 = ctx.currentTime;
+          var glide = s.glide;
+          v.osc.frequency.cancelScheduledValues(t0);
+          if(glide > 0) v.osc.frequency.setTargetAtTime(f, t0, glide/3);
+          else v.osc.frequency.setValueAtTime(f, t0);
+        }
+
+        // update particle to pointer
+        if(v.particle) setParticleToEvent(v.particle, e);
+        return;
+      }
+
+      // Hybrid mode
+      if(s.slideMode === "hybrid"){
+        var voiceIdH = activeGet(e.pointerId);
+        if(!voiceIdH) return;
+        var vH = mapGet(voices, voiceIdH);
+        var st = hybridGet(e.pointerId);
+        var spH = svgPosAtEvent(e);
+        if(!vH || !st || !spH) return;
+
+        var isBend = (s.slideAction === "bend" || s.slideAction === "control");
+
+        var prevPhase = st.phase || "free";
+        st.lastPos = { x: spH.x, y: spH.y };
+      var snap = snapInfoFromPoint(spH.x, spH.y);
+      var targetN = semitoneFromSvgPos(spH.x, spH.y);
+        var now = performance.now();
+
+        // Transition from snap to free
+        if((prevPhase === "snap" || prevPhase === "snapTransition") && !snap.inSnap){
+          var fromKey = findKeyById(st.snapKeyId);
+          if(fromKey && !isBend){
+            midiNoteOffNumber(MIDI_BASE + Math.round(fromKey.n));
+          }
+          if(!vH.particle) vH.particle = createParticle();
+          if(fromKey && vH.particle) setParticleToKeyCenter(vH.particle, fromKey);
+          st.phase = "freeTransition";
+          st.snapKeyId = null;
+          st.fromPos = fromKey ? {x: fromKey.cx, y: fromKey.cy} : {x: spH.x, y: spH.y};
+          st.toPos = {x: spH.x, y: spH.y};
+          st.fromN = fromKey ? fromKey.n : vH.semitone;
+          st.toN = targetN;
+          st.start = now;
+          st.duration = s.glideOut;
+          setVoiceSemitone(vH, targetN, 0, { preserveMidiNote: true });
+          if(isBend) applyPitchBendForVoice(vH, s.bendRange);
+          refreshKeyStyles();
+          return;
+        }
+
+        // Transition from free to snap
+        if((prevPhase === "free" || prevPhase === "freeTransition") && snap.inSnap && snap.key){
+          if(!vH.particle) vH.particle = createParticle();
+          var fromPos = { x: spH.x, y: spH.y };
+          if(vH.particle) setParticlePos(vH.particle, fromPos.x, fromPos.y);
+          st.phase = "snapTransition";
+          st.snapKeyId = snap.key.id;
+          st.fromPos = fromPos;
+          st.toPos = {x: snap.key.cx, y: snap.key.cy};
+          st.fromN = targetN;
+          st.toN = snap.key.n;
+          st.start = now;
+          st.duration = s.glideIn;
+          if(!isBend) vH.midiNote = midiSwapNotes(vH.midiNote, snap.key.n, 100);
+          setVoiceSemitone(vH, snap.key.n, 0, { preserveMidiNote: isBend });
+          if(isBend) applyPitchBendForVoice(vH, s.bendRange);
+          refreshKeyStyles();
+          return;
+        }
+
+        // Stay snapped
+        if(snap.inSnap && snap.key){
+          var prevKeyId = st.snapKeyId;
+          st.snapKeyId = snap.key.id;
+          if(prevPhase !== "snapTransition") st.phase = "snap";
+          if(prevKeyId !== st.snapKeyId && !isBend){
+            vH.midiNote = midiSwapNotes(vH.midiNote, snap.key.n, 100);
+          }
+          setVoiceSemitone(vH, snap.key.n, 0, { preserveMidiNote: isBend });
+          if(isBend) applyPitchBendForVoice(vH, s.bendRange);
+          if(prevKeyId !== st.snapKeyId || prevPhase !== "snapTransition") refreshKeyStyles();
+          return;
+        }
+
+        // Stay free
+        if(vH.particle && (prevPhase === "free" || prevPhase === "snap")) setParticlePos(vH.particle, spH.x, spH.y);
+        if(prevPhase !== "freeTransition") st.phase = "free";
+        st.snapKeyId = null;
+        st.toPos = {x: spH.x, y: spH.y};
+        st.toN = targetN;
+        setVoiceSemitone(vH, targetN, 0, { preserveMidiNote: true });
+        if(isBend) applyPitchBendForVoice(vH, s.bendRange);
+        return;
+      }
+
+      // Quantized gliss: particle snaps to each visited key center
+      if(!activeHas(e.pointerId)) return;
+      if(s.slideMode !== "quantized") return;
+
+      var kk = keyAtClientPoint(e.clientX, e.clientY);
+      if(!kk) return;
+
+      var currentVoiceId = activeGet(e.pointerId);
+      if(!currentVoiceId) return;
+      var anchorKeyIdForVoice = null;
+      var vq = mapGet(voices, currentVoiceId);
+      if(vq && vq.bendAnchorKeyId) anchorKeyIdForVoice = vq.bendAnchorKeyId;
+      var prevKey = anchorKeyIdForVoice || currentVoiceId;
+      if(prevKey === kk.id) return;
+
+      var shift = !!e.shiftKey;
+      var latch = latchMode || shift;
+      if(latch) return;
+
+      if(s.slideAction === "bend" || s.slideAction === "control"){
+        var vq = mapGet(voices, currentVoiceId);
+        var anchorKey = findKeyById(anchorKeyIdForVoice || prevKey);
+        if(!vq || !anchorKey) return;
+        var rangeQ = Math.max(0.01, s.bendRange || 2);
+        var deltaQ = kk.n - anchorKey.n;
+        var clampedQ = clamp(deltaQ, -rangeQ, rangeQ);
+        vq.bendAnchor = anchorKey.n;
+        vq.bendRange = rangeQ;
+        vq.bendAnchorKeyId = anchorKey.id;
+        setVoiceSemitone(vq, anchorKey.n + clampedQ, s.glide*1000, { preserveMidiNote: true });
+        applyPitchBendForVoice(vq, rangeQ);
+        if(vq.particle && s.slideMode !== "field") setParticleToKeyCenter(vq.particle, kk);
+        refreshKeyStyles();
+        return;
+      }
+
+      noteOff(currentVoiceId);
+      noteOn(kk.id, kk.n, { showParticle: false });
+      activeSet(e.pointerId, kk.id);
+
+      var vq = mapGet(voices, kk.id);
+      if(vq && vq.particle) setParticleToKeyCenter(vq.particle, kk);
+
+      refreshKeyStyles();
+    }
+
+    function pointerUp(e){
+      var prev = activeGet(e.pointerId);
+      activeDelete(e.pointerId);
+      hybridDelete(e.pointerId);
+      if(!prev) return;
+
+      var s = currentSettings();
+      if(s.slideMode === "field" || s.slideMode === "hybrid"){
+        noteOff(prev);
+        hybridDelete(e.pointerId);
+        refreshKeyStyles();
+        return;
+      }
+
+      var shift = !!e.shiftKey;
+      var latch = latchMode || shift;
+      if(latch) return;
+      if(setHas(latched, prev)) return;
+
+      noteOff(prev);
+      refreshKeyStyles();
+    }
+
+    elBoard.addEventListener("pointerdown", pointerDown);
+    elBoard.addEventListener("pointermove", pointerMove);
+    elBoard.addEventListener("pointerup", pointerUp);
+    elBoard.addEventListener("pointercancel", pointerUp);
+
+    // Prevent mobile page scroll while playing
+    elBoard.addEventListener("touchstart", function(e){ if(e.preventDefault) e.preventDefault(); }, {passive:false});
+    elBoard.addEventListener("touchmove", function(e){ if(e.preventDefault) e.preventDefault(); }, {passive:false});
+
+    // Keyboard controls
+    window.addEventListener("keydown", function(e){
+      if(e.key === " "){
+        latchMode = !latchMode;
+        elCtxState.textContent = (ctx ? ("audio: " + ctx.state) : "audio: idle") + (latchMode ? " · latch" : "");
+        if(e.preventDefault) e.preventDefault();
+        return;
+      }
+
+      function move(dx,dy){
+        rootSemitone += 2*dx + 1*dy;
+        buildBoard();
+      }
+
+      if(e.key === "ArrowRight") move(1,0);
+      if(e.key === "ArrowLeft") move(-1,0);
+      if(e.key === "ArrowUp") move(0,1);
+      if(e.key === "ArrowDown") move(0,-1);
+    });
+
+    // Start / panic
+    ctl.start.addEventListener("click", function(){
+      ensureAudio();
+      try{ ctx.resume(); }catch(_){ }
+      updateCtxState();
+    });
+
+    ctl.panic.addEventListener("click", function(){
+      allNotesOff();
+    });
+
+    // Best-effort resume
+    window.addEventListener("pointerdown", function(){
+      if(ctx && ctx.state !== "running"){
+        try{ ctx.resume(); }catch(_){ }
+      }
+    });
+
+    // -------- Tiny self-tests (console) --------
+    function assert(cond, msg){ if(!cond) throw new Error("Test failed: " + msg); }
+    function approx(a,b,eps){ eps = eps || 1e-9; return Math.abs(a-b) <= eps; }
+
+    try{
+      assert(!!elBoard, "SVG board exists");
+      assert(!!elKeys, "Keys layer exists");
+      assert(!!elParticles, "Particles layer exists");
+      assert(!!elSnapHints, "Snap hint layer exists");
+      assert(typeof currentSettings === "function", "currentSettings is a function");
+
+      // Mapping tests
+      assert((rootSemitone + 2*1 + 1*0) - rootSemitone === 2, "Right step is +2");
+      assert((rootSemitone + 2*0 + 1*1) - rootSemitone === 1, "Top-right step is +1");
+
+      // Frequency ratio test: 12 semitones doubles frequency
+      var f0 = Number(ctl.fund.value);
+      var s0 = currentSettings();
+      var f12 = f0 * Math.pow(2, (12 + s0.transpose)/12);
+      var f00 = f0 * Math.pow(2, (0 + s0.transpose)/12);
+      assert(approx(f12 / f00, 2), "12 semitones = ×2 frequency");
+
+      // Key geometry test
+      assert(keys.length > 0, "Keys built");
+      assert(typeof keys[0].cx === "number" && typeof keys[0].cy === "number", "Key centers exist");
+
+      // UI mode control tests (snap slider drives mode)
+      assert(!!ctl.massSnap, "Snap radius control exists");
+      assert(typeof ctl.massSnap.min !== "undefined" && typeof ctl.massSnap.max !== "undefined", "Snap radius has bounds");
+
+      console.info("Self-tests: OK");
+    }catch(err){
+      console.error(err);
+    }
+  });
+})();
+</script>
+</body>
+</html>
