@@ -174,10 +174,17 @@
               </div>
               <div>
                 <label for="massSnap">Snap radius</label>
-                <input id="massSnap" type="range" min="0.00" max="0.89" value="0.6" step="0.01" />
+                <input id="massSnap" type="range" min="0.00" max="0.90" value="0.60" step="0.01" />
               </div>
             </div>
             <div class="mono" style="margin-top:6px;">Hybrid only. Snap radius is a fraction of hex size.</div>
+            <div style="margin-top:10px;">
+              <label style="display:flex; align-items:center; gap:8px;">
+                <input id="showDissonance" type="checkbox" style="width:auto; accent-color:#7aa2ff;" />
+                <span>Show dissonance map</span>
+              </label>
+              <div class="mono" style="margin-top:4px;">Highlights tension for adding another note; red = more dissonant.</div>
+            </div>
           </div>
 
           <div>
@@ -260,6 +267,7 @@
       <div class="kbdPanel">
         <svg id="board" viewBox="0 0 1000 700" aria-label="Isomorphic keyboard">
           <g id="keys"></g>
+          <g id="dissonance"></g>
           <g id="snapHints"></g>
           <g id="particles"></g>
         </svg>
@@ -304,6 +312,7 @@
     function $(id){ return document.getElementById(id); }
     var elBoard = $("board");
     var elKeys = $("keys");
+    var elDissonance = $("dissonance");
     var elSnapHints = $("snapHints");
     var elParticles = $("particles");
     var elCtxState = $("ctxState");
@@ -326,7 +335,8 @@
       glideOut: $("glideOut"),
       massSnap: $("massSnap"),
       slideAction: $("slideAction"),
-      bendRange: $("bendRange")
+      bendRange: $("bendRange"),
+      showDissonance: $("showDissonance")
     };
 
     // -------- MIDI over WebSocket --------
@@ -609,6 +619,9 @@
       keys.length = 0;
 
       // Ensure particles stay on top
+      if(elDissonance && elDissonance.parentNode === elBoard){
+        elBoard.appendChild(elDissonance);
+      }
       if(elSnapHints && elSnapHints.parentNode === elBoard){
         elBoard.appendChild(elSnapHints);
       }
@@ -661,6 +674,7 @@
       refreshKeyStyles();
       refreshParticlesForExistingVoices();
       renderSnapHints();
+      renderDissonanceMap();
     }
 
     function refreshKeyStyles(){
@@ -716,21 +730,18 @@
       return pt.matrixTransform(ctm.inverse());
     }
 
-    // Continuous pitch field mapping: n = root + 2x + 1y
-    function pixelToAxial(px, py){
-      var r = boardTf.r;
-      var y = -(py) / (1.5 * r);
-      var x = (px / (Math.sqrt(3) * r)) - (y / 2);
-      return {x:x, y:y};
+    // Continuous pitch field mapping: horizontal axis only (q = x + y/2)
+    function semitoneFromPx(px){
+      var r = boardTf.r || 1;
+      var q = px / (Math.sqrt(3) * r);
+      return rootSemitone + 2 * q;
     }
 
     function semitoneAtEvent(e){
       var p = svgPointFromClient(e.clientX, e.clientY);
       if(!p) return null;
       var px = (p.x - boardTf.pad) + boardTf.minX;
-      var py = (p.y - boardTf.pad) + boardTf.minY;
-      var a = pixelToAxial(px, py);
-      return rootSemitone + 2*a.x + 1*a.y;
+      return semitoneFromPx(px);
     }
 
     function svgPosAtEvent(e){
@@ -799,6 +810,71 @@
         c.setAttribute("vector-effect", "non-scaling-stroke");
         c.setAttribute("pointer-events", "none");
         elSnapHints.appendChild(c);
+      }
+    }
+
+    // -------- Dissonance map --------
+    var dissonanceDirty = false;
+    var INTERVAL_DISSONANCE = {0:0,1:1,2:0.85,3:0.45,4:0.35,5:0.25,6:1,7:0.2,8:0.4,9:0.55,10:0.65,11:0.85};
+
+    function intervalDissonance(delta){
+      var d = Math.abs(Math.round(delta)) % 12;
+      return INTERVAL_DISSONANCE.hasOwnProperty(d) ? INTERVAL_DISSONANCE[d] : 0.7;
+    }
+
+    function dissonanceColor(t){
+      t = Math.max(0, Math.min(1, t));
+      var r = Math.round(80 + 175*t);
+      var g = Math.round(220 - 150*t);
+      var b = Math.round(140 - 80*t);
+      return "rgba(" + r + "," + g + "," + b + ",0.30)";
+    }
+
+    function requestDissonanceUpdate(){
+      if(dissonanceDirty) return;
+      dissonanceDirty = true;
+      requestAnimationFrame(function(){
+        dissonanceDirty = false;
+        renderDissonanceMap();
+      });
+    }
+
+    function renderDissonanceMap(){
+      if(!elDissonance || !ctl.showDissonance) return;
+      elDissonance.innerHTML = "";
+      elDissonance.setAttribute("pointer-events", "none");
+      if(!ctl.showDissonance.checked) return;
+
+      var active = [];
+      mapForEach(voices, function(v){
+        if(v && typeof v.semitone === "number" && isFinite(v.semitone)) active.push(v.semitone);
+      });
+      if(active.length === 0) return;
+
+      var scores = [];
+      var maxScore = 0;
+      for(var i=0;i<keys.length;i++){
+        var k = keys[i];
+        var sVal = 0;
+        for(var j=0;j<active.length;j++){
+          sVal += intervalDissonance(k.n - active[j]);
+        }
+        scores.push(sVal);
+        if(sVal > maxScore) maxScore = sVal;
+      }
+
+      var rHex = boardTf.r * 0.98;
+      for(var m=0;m<keys.length;m++){
+        var key = keys[m];
+        var score = scores[m];
+        var t = (maxScore > 0) ? (score / maxScore) : 0;
+        var fill = dissonanceColor(t);
+        var poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+        poly.setAttribute("points", hexPoints(key.cx, key.cy, rHex));
+        poly.setAttribute("fill", fill);
+        poly.setAttribute("stroke", "none");
+        poly.setAttribute("pointer-events", "none");
+        elDissonance.appendChild(poly);
       }
     }
 
@@ -872,6 +948,7 @@
       });
 
       if(!silent) midiNoteOn(semitone, 100);
+      requestDissonanceUpdate();
 
       // initial particle placement
       if(keyId && keyId.indexOf("k_") === 0){
@@ -895,6 +972,7 @@
       }else{
         v.osc.frequency.setValueAtTime(f, t0);
       }
+      requestDissonanceUpdate();
     }
 
     function noteOff(keyId){
@@ -932,6 +1010,7 @@
       v.particle = null;
       mapDelete(voices, keyId);
       if(mapSize(voices) === 0) midiResetPitchBend();
+      requestDissonanceUpdate();
     }
 
     function allNotesOff(){
@@ -953,6 +1032,9 @@
     ctl.volume.addEventListener("input", function(){ applyMasterGain(); });
     ctl.wave.addEventListener("change", function(){ mapForEach(voices, function(v){ v.osc.type = ctl.wave.value; }); });
     ctl.detune.addEventListener("input", function(){ mapForEach(voices, function(v){ v.osc.detune.value = Number(ctl.detune.value); }); });
+    if(ctl.showDissonance){
+      ctl.showDissonance.addEventListener("change", renderDissonanceMap);
+    }
     if(ctl.massSnap){
       var onSnapChange = function(){
         handleModeChange();
@@ -998,9 +1080,7 @@
 
     function semitoneFromSvgPos(svgX, svgY){
       var px = (svgX - boardTf.pad) + boardTf.minX;
-      var py = (svgY - boardTf.pad) + boardTf.minY;
-      var a = pixelToAxial(px, py);
-      return rootSemitone + 2*a.x + 1*a.y;
+      return semitoneFromPx(px);
     }
 
     function snapInfoFromPoint(svgX, svgY){
