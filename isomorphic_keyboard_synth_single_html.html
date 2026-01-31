@@ -101,14 +101,24 @@
 
     .kbdPanel{padding:12px;}
 
-    /* SVG board */
-    #board{
+    .boardWrap{
+      position:relative;
       width:100%;
-      height:auto;
-      display:block;
+      aspect-ratio:1000 / 700;
       border-radius:14px;
       background:linear-gradient(180deg, rgba(0,0,0,.22), rgba(0,0,0,.12));
       border:1px solid rgba(255,255,255,.08);
+      overflow:hidden;
+    }
+    .boardWrap canvas{
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+      pointer-events:none;
+    }
+    #board{
+      pointer-events:auto;
       touch-action:none;
     }
 
@@ -265,12 +275,14 @@
         <div class="pill" id="layoutPill">hex · 10×7</div>
       </div>
       <div class="kbdPanel">
-        <svg id="board" viewBox="0 0 1000 700" aria-label="Isomorphic keyboard">
-          <g id="keys"></g>
-          <g id="dissonance"></g>
-          <g id="snapHints"></g>
-          <g id="particles"></g>
-        </svg>
+        <div class="boardWrap" id="boardWrap" aria-label="Isomorphic keyboard">
+          <canvas id="grid"></canvas>
+          <canvas id="dissonance"></canvas>
+          <canvas id="highlights"></canvas>
+          <canvas id="snapHints"></canvas>
+          <canvas id="particles"></canvas>
+          <canvas id="board"></canvas>
+        </div>
         <div class="help">
           Snap radius slider sets the mode: max = Quantized (tap/drag, no particle), min = Field (continuous, particle follows), in-between = Hybrid (snap with glide in/out; particle only while between snap and free; circles show snap radius).
         </div>
@@ -310,8 +322,10 @@
 
     // -------- DOM --------
     function $(id){ return document.getElementById(id); }
+    var elBoardWrap = $("boardWrap");
     var elBoard = $("board");
-    var elKeys = $("keys");
+    var elGrid = $("grid");
+    var elHighlights = $("highlights");
     var elDissonance = $("dissonance");
     var elSnapHints = $("snapHints");
     var elParticles = $("particles");
@@ -338,6 +352,14 @@
       bendRange: $("bendRange"),
       showDissonance: $("showDissonance")
     };
+
+    var ctxGrid = null;
+    var ctxHighlights = null;
+    var ctxDissonance = null;
+    var ctxSnapHints = null;
+    var ctxParticles = null;
+    var ctxHit = null;
+    var boardSize = { w: 1000, h: 700 };
 
     // -------- MIDI over WebSocket --------
     var midiSock = null;
@@ -582,10 +604,104 @@
     var keys = [];
     var boardTf = { minX:0, minY:0, pad:70, r:HEX.size };
 
-    function buildBoard(){
-      // Important: do NOT wipe the whole SVG or we delete particles.
-      if(elKeys) elKeys.innerHTML = "";
+    function initCanvasContexts(){
+      ctxGrid = elGrid ? elGrid.getContext("2d") : null;
+      ctxHighlights = elHighlights ? elHighlights.getContext("2d") : null;
+      ctxDissonance = elDissonance ? elDissonance.getContext("2d") : null;
+      ctxSnapHints = elSnapHints ? elSnapHints.getContext("2d") : null;
+      ctxParticles = elParticles ? elParticles.getContext("2d") : null;
+      ctxHit = elBoard ? elBoard.getContext("2d") : null;
+    }
 
+    function resizeCanvases(){
+      if(!elBoardWrap) return;
+      var w = boardSize.w || 1000;
+      var h = boardSize.h || 700;
+      elBoardWrap.style.aspectRatio = w + " / " + h;
+      var dpr = window.devicePixelRatio || 1;
+      var list = [
+        { el: elGrid, ctx: ctxGrid },
+        { el: elDissonance, ctx: ctxDissonance },
+        { el: elHighlights, ctx: ctxHighlights },
+        { el: elSnapHints, ctx: ctxSnapHints },
+        { el: elParticles, ctx: ctxParticles },
+        { el: elBoard, ctx: ctxHit }
+      ];
+      for(var i=0;i<list.length;i++){
+        var item = list[i];
+        if(!item.el) continue;
+        item.el.width = Math.max(1, Math.round(w * dpr));
+        item.el.height = Math.max(1, Math.round(h * dpr));
+        item.el.style.width = "100%";
+        item.el.style.height = "100%";
+        if(item.ctx){
+          item.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          item.ctx.imageSmoothingEnabled = true;
+        }
+      }
+    }
+
+    function drawHexPath(ctx, cx, cy, r){
+      ctx.beginPath();
+      for(var i=0;i<6;i++){
+        var ang = (Math.PI/180) * (90 + i*60);
+        var x = cx + r * Math.cos(ang);
+        var y = cy + r * Math.sin(ang);
+        if(i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+    }
+
+    function renderGrid(){
+      if(!ctxGrid) return;
+      ctxGrid.clearRect(0, 0, boardSize.w, boardSize.h);
+      ctxGrid.lineWidth = 2;
+      ctxGrid.strokeStyle = "rgba(255,255,255,.12)";
+      ctxGrid.textAlign = "center";
+      ctxGrid.textBaseline = "middle";
+      ctxGrid.font = "700 22px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
+
+      for(var i=0;i<keys.length;i++){
+        var k = keys[i];
+        drawHexPath(ctxGrid, k.cx, k.cy, boardTf.r);
+        ctxGrid.fillStyle = k.accidental ? "#3f465f" : "#f2f4f9";
+        ctxGrid.fill();
+        ctxGrid.stroke();
+
+        ctxGrid.fillStyle = k.accidental ? "#f6f7fb" : "#0a0e18";
+        ctxGrid.fillText(semitoneToName(k.n), k.cx, k.cy);
+      }
+    }
+
+    function renderHighlights(){
+      if(!ctxHighlights) return;
+      ctxHighlights.clearRect(0, 0, boardSize.w, boardSize.h);
+      var massSnapped = Object.create(null);
+      if(hybridState){
+        hybridState.forEach(function(st){
+          if(st && st.snapKeyId) massSnapped[st.snapKeyId] = true;
+        });
+      }
+      ctxHighlights.textAlign = "center";
+      ctxHighlights.textBaseline = "middle";
+      ctxHighlights.font = "700 22px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
+      for(var i=0;i<keys.length;i++){
+        var k = keys[i];
+        var isDown = mapHas(voices, k.id) || setHas(latched, k.id);
+        var isSnappedTarget = !!massSnapped[k.id];
+        if(isDown || isSnappedTarget){
+          var activeFill = k.accidental ? "#7aa2ff" : "#ffd36b";
+          drawHexPath(ctxHighlights, k.cx, k.cy, boardTf.r);
+          ctxHighlights.fillStyle = activeFill;
+          ctxHighlights.fill();
+          ctxHighlights.fillStyle = "#0a0e18";
+          ctxHighlights.fillText(semitoneToName(k.n), k.cx, k.cy);
+        }
+      }
+    }
+
+    function buildBoard(){
       var r = HEX.size;
       var pad = 70;
 
@@ -613,21 +729,11 @@
 
       var w = (maxX - minX) + pad*2;
       var h = (maxY - minY) + pad*2;
-      elBoard.setAttribute("viewBox", "0 0 " + w.toFixed(0) + " " + h.toFixed(0));
+      boardSize = { w: w, h: h };
+      resizeCanvases();
 
       boardTf = { minX:minX, minY:minY, pad:pad, r:r };
       keys.length = 0;
-
-      // Ensure particles stay on top
-      if(elDissonance && elDissonance.parentNode === elBoard){
-        elBoard.appendChild(elDissonance);
-      }
-      if(elSnapHints && elSnapHints.parentNode === elBoard){
-        elBoard.appendChild(elSnapHints);
-      }
-      if(elParticles && elParticles.parentNode === elBoard){
-        elBoard.appendChild(elParticles);
-      }
 
       // draw back-to-front
       pix.sort(function(a,b){ return (b[3]-a[3]) || (a[2]-b[2]); });
@@ -641,36 +747,11 @@
         var n = rootSemitone + 2*x2 + 1*y2;
         var id = "k_" + x2 + "_" + y2;
 
-        var g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-        g.setAttribute("data-id", id);
-        g.style.cursor = "pointer";
-
-        var poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-        poly.setAttribute("points", hexPoints(cx, cy, r));
-        poly.setAttribute("stroke", "rgba(255,255,255,.12)");
-        poly.setAttribute("stroke-width", "2");
-        poly.setAttribute("vector-effect", "non-scaling-stroke");
-
         var accidental = isAccidental(n);
-        poly.setAttribute("fill", accidental ? "#3f465f" : "#f2f4f9");
-
-        var text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        text.setAttribute("x", cx);
-        text.setAttribute("y", cy + 6);
-        text.setAttribute("text-anchor", "middle");
-        text.setAttribute("font-size", "22");
-        text.setAttribute("font-weight", "700");
-        text.setAttribute("font-family", "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif");
-        text.setAttribute("fill", accidental ? "#f6f7fb" : "#0a0e18");
-        text.textContent = semitoneToName(n);
-
-        g.appendChild(poly);
-        g.appendChild(text);
-        if(elKeys) elKeys.appendChild(g);
-
-        keys.push({id:id, x:x2, y:y2, n:n, cx:cx, cy:cy, poly:poly, text:text, tiny:null, accidental:accidental});
+        keys.push({id:id, x:x2, y:y2, n:n, cx:cx, cy:cy, poly:null, text:null, tiny:null, accidental:accidental});
       }
 
+      renderGrid();
       refreshKeyStyles();
       refreshParticlesForExistingVoices();
       renderSnapHints();
@@ -678,28 +759,7 @@
     }
 
     function refreshKeyStyles(){
-      // Determine snapped mass targets (visual highlight only)
-      var massSnapped = Object.create(null);
-      if(hybridState){
-        hybridState.forEach(function(st){
-          if(st && st.snapKeyId) massSnapped[st.snapKeyId] = true;
-        });
-      }
-
-      for(var i2=0;i2<keys.length;i2++){
-        var k = keys[i2];
-        var isDown = mapHas(voices, k.id) || setHas(latched, k.id);
-        var isSnappedTarget = !!massSnapped[k.id];
-
-        if(isDown || isSnappedTarget){
-          var activeFill = k.accidental ? "rgba(122,162,255,0.90)" : "#ffd36b";
-          k.poly.setAttribute("fill", activeFill);
-          k.text.setAttribute("fill", "#0a0e18");
-        }else{
-          k.poly.setAttribute("fill", k.accidental ? "#3f465f" : "#f2f4f9");
-          k.text.setAttribute("fill", k.accidental ? "#f6f7fb" : "#0a0e18");
-        }
-      }
+      renderHighlights();
     }
 
     function findKeyById(id){
@@ -707,27 +767,24 @@
       return null;
     }
 
-    function keyAtTarget(target){
-      if(!target) return null;
-      var g = target.closest ? target.closest("g[data-id]") : null;
-      if(!g) return null;
-      return findKeyById(g.getAttribute("data-id"));
-    }
-
     function keyAtClientPoint(clientX, clientY){
-      var el = document.elementFromPoint(clientX, clientY);
-      if(!el) return null;
-      return keyAtTarget(el);
+      var bp = boardPointFromClient(clientX, clientY);
+      if(!bp) return null;
+      var nk = nearestKeyAndDist(bp.x, bp.y);
+      if(!nk.key) return null;
+      var r = boardTf.r * 0.98;
+      if(nk.d2 <= (r*r)) return nk.key;
+      return null;
     }
 
-    // ----- SVG coordinate helpers -----
-    function svgPointFromClient(clientX, clientY){
-      var pt = elBoard.createSVGPoint();
-      pt.x = clientX;
-      pt.y = clientY;
-      var ctm = elBoard.getScreenCTM();
-      if(!ctm) return null;
-      return pt.matrixTransform(ctm.inverse());
+    // ----- Board coordinate helpers -----
+    function boardPointFromClient(clientX, clientY){
+      if(!elBoard) return null;
+      var rect = elBoard.getBoundingClientRect();
+      if(!rect || rect.width === 0 || rect.height === 0) return null;
+      var x = (clientX - rect.left) * (boardSize.w / rect.width);
+      var y = (clientY - rect.top) * (boardSize.h / rect.height);
+      return { x: x, y: y };
     }
 
     // Continuous pitch field mapping: horizontal axis only (q = x + y/2)
@@ -738,32 +795,26 @@
     }
 
     function semitoneAtEvent(e){
-      var p = svgPointFromClient(e.clientX, e.clientY);
+      var p = boardPointFromClient(e.clientX, e.clientY);
       if(!p) return null;
       var px = (p.x - boardTf.pad) + boardTf.minX;
       return semitoneFromPx(px);
     }
 
-    function svgPosAtEvent(e){
-      return svgPointFromClient(e.clientX, e.clientY);
+    function boardPosAtEvent(e){
+      return boardPointFromClient(e.clientX, e.clientY);
     }
 
     // -------- Particles --------
     function createParticle(){
-      var c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      c.setAttribute("r", "10");
-      c.setAttribute("fill", "rgba(255,120,80,0.90)");
-      c.setAttribute("stroke", "rgba(255,255,255,0.85)");
-      c.setAttribute("stroke-width", "2");
-      c.setAttribute("vector-effect", "non-scaling-stroke");
-      if(elParticles) elParticles.appendChild(c);
-      return c;
+      return { x: 0, y: 0 };
     }
 
     function setParticlePos(p, cx, cy){
       if(!p) return;
-      p.setAttribute("cx", cx.toFixed(2));
-      p.setAttribute("cy", cy.toFixed(2));
+      p.x = cx;
+      p.y = cy;
+      requestParticleRender();
     }
 
     function setParticleToKeyCenter(p, key){
@@ -772,13 +823,13 @@
     }
 
     function setParticleToEvent(p, e){
-      var sp = svgPosAtEvent(e);
+      var sp = boardPosAtEvent(e);
       if(!sp) return;
       setParticlePos(p, sp.x, sp.y);
     }
 
     function refreshParticlesForExistingVoices(){
-      // If the board is rebuilt, key centers change in SVG coords.
+      // If the board is rebuilt, key centers change in board coords.
       // Re-anchor any key-based voices.
       mapForEach(voices, function(v, keyId){
         if(!v || !v.particle) return;
@@ -789,27 +840,46 @@
       });
     }
 
+    var particleDirty = false;
+    function requestParticleRender(){
+      if(particleDirty) return;
+      particleDirty = true;
+      requestAnimationFrame(function(){
+        particleDirty = false;
+        renderParticles();
+      });
+    }
+
+    function renderParticles(){
+      if(!ctxParticles) return;
+      ctxParticles.clearRect(0, 0, boardSize.w, boardSize.h);
+      mapForEach(voices, function(v){
+        if(!v || !v.particle) return;
+        ctxParticles.beginPath();
+        ctxParticles.arc(v.particle.x, v.particle.y, 10, 0, Math.PI*2);
+        ctxParticles.fillStyle = "rgba(255,120,80,0.90)";
+        ctxParticles.fill();
+        ctxParticles.lineWidth = 2;
+        ctxParticles.strokeStyle = "rgba(255,255,255,0.85)";
+        ctxParticles.stroke();
+      });
+    }
+
     function renderSnapHints(){
-      if(!elSnapHints) return;
-      elSnapHints.innerHTML = "";
-      elSnapHints.setAttribute("pointer-events", "none");
+      if(!ctxSnapHints) return;
+      ctxSnapHints.clearRect(0, 0, boardSize.w, boardSize.h);
       var mode = currentSettings().slideMode;
       if(mode !== "hybrid") return;
       var s = currentSettings();
       var snapR = boardTf.r * Math.max(0, s.massSnap);
+      ctxSnapHints.lineWidth = 5;
       for(var i=0;i<keys.length;i++){
         var k = keys[i];
-        var c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-        c.setAttribute("cx", k.cx.toFixed(2));
-        c.setAttribute("cy", k.cy.toFixed(2));
-        c.setAttribute("r", snapR.toFixed(2));
-        c.setAttribute("fill", "none");
         var strokeColor = k.accidental ? "rgba(255,211,107,0.88)" : "rgba(122,162,255,0.90)";
-        c.setAttribute("stroke", strokeColor);
-        c.setAttribute("stroke-width", "2.5");
-        c.setAttribute("vector-effect", "non-scaling-stroke");
-        c.setAttribute("pointer-events", "none");
-        elSnapHints.appendChild(c);
+        ctxSnapHints.strokeStyle = strokeColor;
+        ctxSnapHints.beginPath();
+        ctxSnapHints.arc(k.cx, k.cy, snapR, 0, Math.PI*2);
+        ctxSnapHints.stroke();
       }
     }
 
@@ -840,9 +910,8 @@
     }
 
     function renderDissonanceMap(){
-      if(!elDissonance || !ctl.showDissonance) return;
-      elDissonance.innerHTML = "";
-      elDissonance.setAttribute("pointer-events", "none");
+      if(!ctxDissonance || !ctl.showDissonance) return;
+      ctxDissonance.clearRect(0, 0, boardSize.w, boardSize.h);
       if(!ctl.showDissonance.checked) return;
 
       var active = [];
@@ -869,12 +938,9 @@
         var score = scores[m];
         var t = (maxScore > 0) ? (score / maxScore) : 0;
         var fill = dissonanceColor(t);
-        var poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-        poly.setAttribute("points", hexPoints(key.cx, key.cy, rHex));
-        poly.setAttribute("fill", fill);
-        poly.setAttribute("stroke", "none");
-        poly.setAttribute("pointer-events", "none");
-        elDissonance.appendChild(poly);
+        drawHexPath(ctxDissonance, key.cx, key.cy, rHex);
+        ctxDissonance.fillStyle = fill;
+        ctxDissonance.fill();
       }
     }
 
@@ -1006,8 +1072,8 @@
         if(v.osc) v.osc.stop(t0 + Math.max(0.02, r + 0.02));
       }catch(_){ }
 
-      if(v.particle && v.particle.remove) v.particle.remove();
       v.particle = null;
+      requestParticleRender();
       mapDelete(voices, keyId);
       if(mapSize(voices) === 0) midiResetPitchBend();
       requestDissonanceUpdate();
@@ -1044,6 +1110,7 @@
     }
 
     // -------- Build initial board --------
+    initCanvasContexts();
     buildBoard();
     midiConnect();
 
@@ -1137,8 +1204,8 @@
             }else{
               st.phase = "snap";
               st.fromPos = null;
-              if(v.particle && v.particle.remove) v.particle.remove();
               v.particle = null;
+              requestParticleRender();
             }
           }
         }
@@ -1164,7 +1231,7 @@
         safeSetPointerCapture(e.pointerId);
         activeSet(e.pointerId, voiceId);
 
-        var sp0 = svgPosAtEvent(e);
+        var sp0 = boardPosAtEvent(e);
         if(!sp0) return;
 
         if(s.slideMode === "hybrid"){
@@ -1219,7 +1286,7 @@
       }
 
       // quantized mode
-      var k = keyAtClientPoint(e.clientX, e.clientY) || keyAtTarget(e.target);
+      var k = keyAtClientPoint(e.clientX, e.clientY);
       if(!k) return;
 
       safeSetPointerCapture(e.pointerId);
@@ -1303,7 +1370,7 @@
         if(!voiceIdH) return;
         var vH = mapGet(voices, voiceIdH);
         var st = hybridGet(e.pointerId);
-        var spH = svgPosAtEvent(e);
+      var spH = boardPosAtEvent(e);
         if(!vH || !st || !spH) return;
 
         var isBend = (s.slideAction === "bend" || s.slideAction === "control");
@@ -1502,9 +1569,9 @@
     function approx(a,b,eps){ eps = eps || 1e-9; return Math.abs(a-b) <= eps; }
 
     try{
-      assert(!!elBoard, "SVG board exists");
-      assert(!!elKeys, "Keys layer exists");
-      assert(!!elParticles, "Particles layer exists");
+      assert(!!elBoard, "Board canvas exists");
+      assert(!!elGrid, "Grid canvas exists");
+      assert(!!elParticles, "Particles canvas exists");
       assert(!!elSnapHints, "Snap hint layer exists");
       assert(typeof currentSettings === "function", "currentSettings is a function");
 
