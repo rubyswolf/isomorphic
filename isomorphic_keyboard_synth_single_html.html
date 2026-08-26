@@ -238,7 +238,7 @@
 
           <div>
             <label for="bendRange">Bend range (semitones)</label>
-            <input id="bendRange" type="number" min="0.1" max="24" step="0.1" value="2" />
+            <input id="bendRange" type="number" min="1" max="24" step="1" value="2" />
           </div>
 
           <div class="row">
@@ -387,20 +387,23 @@
       midiSend({ type: "note_off", note: note });
     }
 
-    function midiSendPitchBendValue(value){
+    function midiSendPitchBendValue(value, range){
       var v = Math.round(clamp(value, -8192, 8191));
-      midiSend({ type: "pitch_bend", value: v });
+      var payload = { type: "pitch_bend", value: v };
+      if(range !== undefined && range !== null) payload.range = range;
+      midiSend(payload);
     }
 
     function midiSendPitchBendDelta(deltaSemitones, range){
-      var r = Math.max(0.01, range || 2);
+      var r = Math.round(clamp(range || 2, 1, 96));
       var norm = clamp(deltaSemitones / r, -1, 1);
-      var bendVal = Math.round(norm * 8191);
-      midiSendPitchBendValue(bendVal);
+      var bendVal = norm < 0 ? Math.round(norm * 8192) : Math.round(norm * 8191);
+      midiSendPitchBendValue(bendVal, r);
     }
 
     function midiResetPitchBend(){
-      midiSendPitchBendValue(0);
+      var range = Math.round(clamp(Number(ctl.bendRange.value) || 2, 1, 96));
+      midiSendPitchBendValue(0, range);
     }
 
     function applyPitchBendForVoice(v, range){
@@ -433,6 +436,7 @@
 
       midiSock.onopen = function(){
         midiReady = true;
+        setSynthMutedForMidi(true);
         console.info("MIDI WS connected");
       };
       midiSock.onclose = function(){
@@ -474,8 +478,15 @@
     function setSynthMutedForMidi(shouldMute){
       var next = !!shouldMute;
       if(next === synthMutedForMidi) return;
+      allNotesOff();
       synthMutedForMidi = next;
-      if(synthMutedForMidi) allNotesOff();
+      ctl.start.disabled = synthMutedForMidi;
+      if(synthMutedForMidi && ctx){
+        var oldCtx = ctx;
+        ctx = null;
+        master = null;
+        try{ oldCtx.close(); }catch(_){ }
+      }
       applyMasterGain();
       updateCtxState();
     }
@@ -952,8 +963,10 @@
       var glideMs = (opts.glideMs !== undefined && opts.glideMs !== null) ? opts.glideMs : s.glide*1000;
       var useGlide = glideMs > 0;
       var midiNote = MIDI_BASE + Math.round(semitone);
+      var useLocalAudio = !synthMutedForMidi && !silent;
+      var startsNewMidiPhrase = !silent && mapSize(voices) === 0;
 
-      ensureAudio();
+      if(useLocalAudio) ensureAudio();
 
       if(mapHas(voices, keyId)){
         var v = mapGet(voices, keyId);
@@ -977,25 +990,24 @@
 
       var osc = null;
       var gain = null;
-      osc = ctx.createOscillator();
-      gain = ctx.createGain();
-      osc.type = s.wave;
-      osc.detune.value = s.detune;
-      osc.frequency.value = freqForSemitone(semitone);
+      if(useLocalAudio){
+        osc = ctx.createOscillator();
+        gain = ctx.createGain();
+        osc.type = s.wave;
+        osc.detune.value = s.detune;
+        osc.frequency.value = freqForSemitone(semitone);
 
-      var t0 = ctx.currentTime;
-      var a = s.attack;
-      var sustain = s.sustain;
-
-      gain.gain.cancelScheduledValues(t0);
-      gain.gain.setValueAtTime(0.0001, t0);
-      gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, sustain), t0 + Math.max(0.001, a));
-
-      if(!silent){
+        var t0 = ctx.currentTime;
+        var a = s.attack;
+        var sustain = s.sustain;
+        gain.gain.cancelScheduledValues(t0);
+        gain.gain.setValueAtTime(0.0001, t0);
+        gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, sustain),
+                                               t0 + Math.max(0.001, a));
         osc.connect(gain);
         gain.connect(master);
+        osc.start();
       }
-      osc.start();
 
       var particle = (opts.showParticle === false) ? null : createParticle();
       mapSet(voices, keyId, {
@@ -1013,7 +1025,10 @@
         slideActionAtStart: s.slideAction
       });
 
-      if(!silent) midiNoteOn(semitone, 100);
+      if(!silent){
+        if(startsNewMidiPhrase) midiResetPitchBend();
+        midiNoteOn(semitone, 100);
+      }
       requestDissonanceUpdate();
 
       // initial particle placement
@@ -1075,7 +1090,6 @@
       v.particle = null;
       requestParticleRender();
       mapDelete(voices, keyId);
-      if(mapSize(voices) === 0) midiResetPitchBend();
       requestDissonanceUpdate();
     }
 
@@ -1096,8 +1110,8 @@
 
     // Live parameter updates
     ctl.volume.addEventListener("input", function(){ applyMasterGain(); });
-    ctl.wave.addEventListener("change", function(){ mapForEach(voices, function(v){ v.osc.type = ctl.wave.value; }); });
-    ctl.detune.addEventListener("input", function(){ mapForEach(voices, function(v){ v.osc.detune.value = Number(ctl.detune.value); }); });
+    ctl.wave.addEventListener("change", function(){ mapForEach(voices, function(v){ if(v.osc) v.osc.type = ctl.wave.value; }); });
+    ctl.detune.addEventListener("input", function(){ mapForEach(voices, function(v){ if(v.osc) v.osc.detune.value = Number(ctl.detune.value); }); });
     if(ctl.showDissonance){
       ctl.showDissonance.addEventListener("change", renderDissonanceMap);
     }
@@ -1548,6 +1562,7 @@
 
     // Start / panic
     ctl.start.addEventListener("click", function(){
+      if(synthMutedForMidi) return;
       ensureAudio();
       try{ ctx.resume(); }catch(_){ }
       updateCtxState();
@@ -1559,7 +1574,7 @@
 
     // Best-effort resume
     window.addEventListener("pointerdown", function(){
-      if(ctx && ctx.state !== "running"){
+      if(!synthMutedForMidi && ctx && ctx.state !== "running"){
         try{ ctx.resume(); }catch(_){ }
       }
     });

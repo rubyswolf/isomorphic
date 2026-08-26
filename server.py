@@ -13,9 +13,29 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 HTML_FILE = "isomorphic_keyboard_synth_single_html.html"
 PORT = 5000
 MIDI_PORT = "Python MIDI 1"
+MIDI_CHANNEL = 0
+PITCH_BEND_MIN = -8192
+PITCH_BEND_MAX = 8191
+PITCH_BEND_RANGE_MIN = 1
+PITCH_BEND_RANGE_MAX = 96
 
 app = Flask(__name__, static_folder=BASE_DIR)
 sock = Sock(app)
+
+
+def clamp_int(value, minimum: int, maximum: int, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(minimum, min(maximum, parsed))
+
+
+def send_pitch_bend_range(out: mido.ports.BaseOutput, semitones: int) -> None:
+    # RPN 0 selects pitch-bend sensitivity. DiffOsc consumes the MSB as semitones.
+    for control, value in ((101, 0), (100, 0), (6, semitones), (101, 127), (100, 127)):
+        out.send(mido.Message("control_change", channel=MIDI_CHANNEL,
+                              control=control, value=value))
 
 
 def open_midi_output() -> Optional[mido.ports.BaseOutput]:
@@ -44,6 +64,7 @@ def assets(asset: str):
 @sock.route("/ws")
 def websocket(ws):
     out = open_midi_output()
+    pitch_bend_range = None
     status = {
         "type": "status",
         "connected": bool(out),
@@ -72,20 +93,27 @@ def websocket(ws):
 
             msg_type = data.get("type")
             if msg_type == "note_on" and out:
-                note = int(data.get("note", 60))
-                velocity = int(data.get("velocity", 100))
-                out.send(mido.Message("note_on", note=note, velocity=velocity))
+                note = clamp_int(data.get("note"), 0, 127, 60)
+                velocity = clamp_int(data.get("velocity"), 0, 127, 100)
+                out.send(mido.Message("note_on", channel=MIDI_CHANNEL,
+                                      note=note, velocity=velocity))
             elif msg_type == "note_off" and out:
-                note = int(data.get("note", 60))
-                velocity = int(data.get("velocity", 0))
-                out.send(mido.Message("note_off", note=note, velocity=velocity))
+                note = clamp_int(data.get("note"), 0, 127, 60)
+                velocity = clamp_int(data.get("velocity"), 0, 127, 0)
+                out.send(mido.Message("note_off", channel=MIDI_CHANNEL,
+                                      note=note, velocity=velocity))
             elif msg_type == "pitch_bend" and out:
-                try:
-                    raw_val = int(data.get("value", 0))
-                except Exception:
-                    raw_val = 0
-                raw_val = max(-8192, min(8191, raw_val))
-                out.send(mido.Message("pitchwheel", pitch=raw_val))
+                requested_range = data.get("range")
+                if requested_range is not None:
+                    requested_range = clamp_int(requested_range, PITCH_BEND_RANGE_MIN,
+                                                PITCH_BEND_RANGE_MAX, 12)
+                    if requested_range != pitch_bend_range:
+                        send_pitch_bend_range(out, requested_range)
+                        pitch_bend_range = requested_range
+                raw_val = clamp_int(data.get("value"), PITCH_BEND_MIN,
+                                    PITCH_BEND_MAX, 0)
+                out.send(mido.Message("pitchwheel", channel=MIDI_CHANNEL,
+                                      pitch=raw_val))
             elif msg_type == "panic" and out:
                 out.panic()
     finally:
